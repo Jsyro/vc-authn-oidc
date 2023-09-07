@@ -17,8 +17,7 @@ class AttributeFilter(BaseModel):
 
 
 class ReqAttr(BaseModel):
-    name: str
-    names: Optional[List[str]]
+    names: List[str]
     label: Optional[str]
     restrictions: List[AttributeFilter]
 
@@ -58,6 +57,7 @@ class VerificationConfigBase(BaseModel):
                     "from": int(time.time()),
                     "to": int(time.time()),
                 }
+        # TODO add I indexing
         for req_pred in self.proof_request.requested_predicates:
             label = req_pred.label or "req_pred_" + str(i)
             result["requested_predicates"][label] = req_pred.dict(exclude_none=True)

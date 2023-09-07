@@ -1,4 +1,4 @@
-import logging
+import structlog
 import json
 import uuid
 import dataclasses
@@ -9,7 +9,7 @@ from oic.oic.message import OpenIDSchema
 from ...authSessions.models import AuthSession
 from ...verificationConfigs.models import VerificationConfig
 
-logger = logging.getLogger(__name__)
+logger = structlog.getLogger(__name__)
 
 PROOF_CLAIMS_ATTRIBUTE_NAME = "vc_presented_attributes"
 
@@ -30,7 +30,7 @@ class Token(BaseModel):
     @classmethod
     def get_claims(
         cls, pres_exch: Dict, auth_session: AuthSession, ver_config: VerificationConfig
-    ) -> List["Claim"]:
+    ) -> dict[str, str]:
         """Converts vc presentation values to oidc claims"""
         oidc_claims: List[Claim] = [
             Claim(

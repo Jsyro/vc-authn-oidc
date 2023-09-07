@@ -1,13 +1,14 @@
 import requests
 import json
-import logging
+import structlog
+from typing import Optional, Union
 from uuid import UUID
 from .models import WalletDid, CreatePresentationResponse
 from ..config import settings
 from .config import AgentConfig, MultiTenantAcapy, SingleTenantAcapy
 
 _client = None
-logger = logging.getLogger(__name__)
+logger = structlog.getLogger(__name__)
 
 WALLET_DID_URI = "/wallet/did"
 PUBLIC_WALLET_DID_URI = "/wallet/did/public"
@@ -19,7 +20,7 @@ class AcapyClient:
     acapy_host = settings.ACAPY_ADMIN_URL
     service_endpoint = settings.ACAPY_AGENT_URL
 
-    wallet_token: str = None
+    wallet_token: Optional[str] = None
     agent_config: AgentConfig
 
     def __init__(self):
@@ -53,7 +54,7 @@ class AcapyClient:
         logger.debug("<<< create_presenation_request")
         return result
 
-    def get_presentation_request(self, presentation_exchange_id: UUID):
+    def get_presentation_request(self, presentation_exchange_id: Union[UUID, str]):
         logger.debug(">>> get_presentation_request")
 
         resp_raw = requests.get(
@@ -69,7 +70,7 @@ class AcapyClient:
         logger.debug("<<< get_presentation_request -> {resp}")
         return resp
 
-    def verify_presentation(self, presentation_exchange_id: UUID):
+    def verify_presentation(self, presentation_exchange_id: Union[UUID, str]):
         logger.debug(">>> verify_presentation")
 
         resp_raw = requests.post(
@@ -81,6 +82,7 @@ class AcapyClient:
             headers=self.agent_config.get_headers(),
         )
         assert resp_raw.status_code == 200, resp_raw.content
+
         resp = json.loads(resp_raw.content)
 
         logger.debug(f"<<< verify_presentation -> {resp}")

@@ -2,7 +2,12 @@ name: Controller Unit Tests
 
 on:
   push:
-    branches: 2.0-development
+    branches:
+      - '2.0-development'
+  pull_request:
+    branches:
+      - '2.0-development'
+    
 
 jobs:
   build:
@@ -22,7 +27,7 @@ jobs:
         working-directory: ./oidc-controller
         run: |
           python -m pip install --upgrade pip
-          pip install flake8 pytest
+          pip install -r requirements-dev.txt
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
       - name: Lint with flake8
         working-directory: ./oidc-controller
@@ -34,4 +39,4 @@ jobs:
       - name: Test with pytest
         working-directory: ./oidc-controller
         run: |
-          pytest
+          pytest --log-cli-level=INFO

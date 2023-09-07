@@ -94,7 +94,7 @@ EOF
 # -----------------------------------------------------------------------------------------------------------------
 # Default Settings:
 # -----------------------------------------------------------------------------------------------------------------
-DEFAULT_CONTAINERS="keycloak keycloak-db controller-db controller-cache"
+DEFAULT_CONTAINERS="keycloak keycloak-db controller-db"
 ACAPY_CONTAINERS="aca-py wallet-db"
 PROD_CONTAINERS="controller"
 
@@ -145,13 +145,8 @@ configureEnvironment() {
     esac
   done
 
-  if [ ! -f ../oidc-controller/signing_key.pem ]; then
-    openssl genrsa -out ../oidc-controller/signing_key.pem 2048
-  fi
-
   ## global
   export COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-vc-authn}"
-  export GENESIS_URL="${GENESIS_URL:-http://$DOCKERHOST:9000/genesis}"
 
   # controller-db
   export MONGODB_HOST="controller-db"
@@ -162,24 +157,24 @@ configureEnvironment() {
 
 
   # controller
-  export CONTROLLER_SERVICE_PORT=5201
+  export CONTROLLER_SERVICE_PORT=${CONTROLLER_SERVICE_PORT:-5000}
   export CONTROLLER_URL="${CONTROLLER_URL:-http://controller:5000}"
-  export CONTROLLER_URL_LOCAL="localhost:5201"
   export CONTROLLER_WEB_HOOK_URL=${CONTROLLER_WEB_HOOK_URL:-${CONTROLLER_URL}/webhooks}
   if [ ! -z "${CONTROLLER_API_KEY}" ]; then
     CONTROLLER_WEB_HOOK_URL="${CONTROLLER_WEB_HOOK_URL}#${CONTROLLER_API_KEY}"
   fi
   export ST_ACAPY_ADMIN_API_KEY_NAME="x-api-key"
 
+  # The redirect url can be a web link or the name of a template
+  export CONTROLLER_CAMERA_REDIRECT_URL="wallet_howto"
+
+  # The number of time in seconds a proof request will be valid for
+  export CONTROLLER_PRESENTATION_EXPIRE_TIME=10
+
   #controller app settings
   export SET_NON_REVOKED="True" # both work
   export USE_OOB_PRESENT_PROOF="False" #BC wallet kinda supports true.
   export USE_OOB_LOCAL_DID_SERVICE="False" #bc wallet does not support true
-
-  # controller-cache
-  export REDIS_HOST="controller-cache"
-  export REDIS_PORT=6379
-  export REDIS_NAME="provider"
 
   # agent
   export AGENT_TENANT_MODE="${AGENT_TENANT_MODE:-single}"
@@ -204,11 +199,10 @@ configureEnvironment() {
   export KEYCLOAK_DB_PASSWORD="keycloak"
 
   # keycloak
-  export KEYCLOAK_DB_VENDOR="POSTGRES"
+  export KEYCLOAK_DB_VENDOR="postgres"
   export KEYCLOAK_DB_ADDR="keycloak-db"
   export KEYCLOAK_USER="admin"
   export KEYCLOAK_PASSWORD="admin"
-  export KEYCLOAK_IMPORT="/tmp/keycloak_import.json"
   export KEYCLOAK_LOGLEVEL="WARN"
   export KEYCLOAK_ROOT_LOGLEVEL="WARN"
 
@@ -269,11 +263,29 @@ toLower() {
 }
 
 initializeUserPrompts() {
+  ######
+  #  If .env-dev exists, use it to populate .env
+  #  Otherwise, create an empty .env file
+  if [ -f ".env-dev" ] ; then
+    cat .env-dev > .env
+    echo "" >> .env
+  else
+    touch .env
+  fi
+  ######
+
+  # Set CONTROLLER_SERVICE_PORT for the ngrok service to use
+  if [ ! -z "$CONTROLLER_SERVICE_PORT" ]; then
+    echo "CONTROLLER_SERVICE_PORT=${CONTROLLER_SERVICE_PORT}" >> .env
+  else
+    echo "CONTROLLER_SERVICE_PORT=5000" >> .env
+  fi
+
   PS3="Is your agent single-tenant or multi-tenant? "
   select opt in "Single-Tenant" "Multi-Tenant/Traction" "Quit"; do
     case $REPLY in
       1)
-        echo "AGENT_TENANT_MODE=single" > .env
+        echo "AGENT_TENANT_MODE=single" >> .env
         export AGENT_TENANT_MODE=single
         echo "AGENT_WALLET_SEED=$(generateSeed vc-authn-oidc)" >> .env
         break
@@ -281,7 +293,7 @@ initializeUserPrompts() {
       2)
         read  -p "Please provide your tenant's Wallet ID:" MT_ACAPY_WALLET_ID
         read  -p "Please provide your tenant's Wallet Key:" MT_ACAPY_WALLET_KEY
-        echo "AGENT_TENANT_MODE=multi" > .env
+        echo "AGENT_TENANT_MODE=multi" >> .env
         export AGENT_TENANT_MODE=multi
         echo "MT_ACAPY_WALLET_ID=${MT_ACAPY_WALLET_ID}" >> .env
         echo "MT_ACAPY_WALLET_KEY=${MT_ACAPY_WALLET_KEY}" >> .env
@@ -340,19 +352,51 @@ function setNgrokEndpoints() {
   fi
 
   echoInfo "Determining ngrok url for controller service..."
-  docker run --rm curlimages/curl -L -s http://${DOCKERHOST}:4056/api/tunnels > controller-ngrok.json
-  NGROK_CONTROLLER_URL=$(docker run --rm -i stedolan/jq < controller-ngrok.json --raw-output '.tunnels | map(select(.name=="command_line")) | .[0] | .public_url')
+  getNgrokUrl http://${DOCKERHOST}:4056/api/tunnels controller-ngrok.json NGROK_CONTROLLER_URL
   export CONTROLLER_URL=${NGROK_CONTROLLER_URL}
   echoSuccess "The controller url is: ${NGROK_CONTROLLER_URL}"
 
   echoInfo "Determining ngrok url for agent service..."
-  docker run --rm curlimages/curl -L -s http://${DOCKERHOST}:${NGROK_AGENT_PORT}/api/tunnels > agent-ngrok.json
-  NGROK_AGENT_URL=$(docker run --rm -i stedolan/jq < agent-ngrok.json --raw-output '.tunnels | map(select(.name=="command_line")) | .[0] | .public_url')
+  getNgrokUrl http://${DOCKERHOST}:${NGROK_AGENT_PORT}/api/tunnels agent-ngrok.json NGROK_AGENT_URL
   export AGENT_ENDPOINT=${NGROK_AGENT_URL}
   echoSuccess "The agent url is: ${NGROK_AGENT_URL}"
-
-  rm *-ngrok.json
 }
+
+function getNgrokUrl() {
+  _url=$1
+  _output_file=$2
+  _target_variable=$3
+
+  function extractUrl() {
+    docker run --rm curlimages/curl -L -s $_url > $_output_file
+    NGROK_URL=$(docker run --rm -i ghcr.io/jqlang/jq:1.7rc1 < $_output_file --raw-output '.tunnels | map(select(.name=="command_line")) | .[0] | .public_url')
+  
+    if [ -z "${NGROK_URL}" ] || [ "null" = "${NGROK_URL}" ]; then
+      return 1
+    else
+      return 0
+    fi
+  }
+
+  local startTime=${SECONDS}
+  local timeout=${TIMEOUT:-60}
+  while ! extractUrl; do
+    printf "."
+    local duration=$(($SECONDS - $startTime))
+    if (( ${duration} >= ${timeout} )); then
+      echoError "It was not possible to establish a connection with ngrok, please check ${_output_file} and the ngrok container logs for errors."
+      rtnCd=1
+      break
+    fi
+    sleep 1
+  done
+  
+  rm $_output_file
+
+  # assign value to target variable
+  printf -v "$_target_variable" "%s" "$NGROK_URL"
+}
+
 # =================================================================================================================
 
 pushd ${SCRIPT_HOME} >/dev/null
@@ -378,6 +422,7 @@ start|up)
     fi
   fi
 
+
   configureEnvironment $@
 
   docker-compose up -d ${_startupParams} ${DEFAULT_CONTAINERS} ${ACAPY_CONTAINERS} ${PROD_CONTAINERS}
@@ -390,7 +435,8 @@ logs)
   ;;
 stop)
   configureEnvironment
-  docker-compose stop 
+  docker-compose stop
+  docker compose -f docker-compose-ngrok.yaml stop
   ;;
 rm|down)  
   # delete previously saved settings
